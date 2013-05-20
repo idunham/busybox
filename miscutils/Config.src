@@ -423,6 +423,13 @@ config MAN
 	help
 	  Format and display manual pages.
 
+config NROFF
+	bool "nroff"
+	default n
+	help
+	nroff formats troff documents (used by man applet).
+	Currently this has very bad formatting.
+
 config MICROCOM
 	bool "microcom"
 	default y
