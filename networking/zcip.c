@@ -36,7 +36,7 @@
 //usage:     "\nexits only on I/O errors (link down etc)"
 
 #include "libbb.h"
-#include <netinet/ether.h>
+#include <netinet/if_ether.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <linux/sockios.h>

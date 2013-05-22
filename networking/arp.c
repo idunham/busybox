@@ -37,7 +37,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <net/if_arp.h>
-#include <netinet/ether.h>
+#include <netinet/if_ether.h>
 #include <netpacket/packet.h>
 
 #define DEBUG 0
