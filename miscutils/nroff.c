@@ -3,6 +3,18 @@
 * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
 */
 
+
+//applet:IF_NROFF(APPLET(nroff, BB_DIR_USR_BIN, BB_SUID_DROP))
+
+//kbuild:lib-$(CONFIG_NROFF)       += nroff.o
+
+//config:config NROFF
+//config:	bool "nroff"
+//config:	default n
+//config:	help
+//config:	nroff formats troff documents (used by man applet).
+//config:	Currently this has very bad formatting.
+
 //usage:#define nroff_trivial_usage 
 //usage:    "[OPTION] [FILE]"
 //usage:#define nroff_full_usage "\n\n"
