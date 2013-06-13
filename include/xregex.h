@@ -20,4 +20,8 @@ void xregcomp(regex_t *preg, const char *regex, int cflags) FAST_FUNC;
 
 POP_SAVED_FUNCTION_VISIBILITY
 
+#ifndef RE_TRANSLATE_TYPE
+#define RE_TRANSLATE_TYPE unsigned char *
+#endif
+
 #endif
