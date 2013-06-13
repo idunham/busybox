@@ -21,6 +21,7 @@
 //usage:#define linux64_full_usage ""
 
 #include <sys/personality.h>
+#include <linux/personality.h>
 
 #include "libbb.h"
 
