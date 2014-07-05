@@ -34,6 +34,7 @@
 //usage:       "# mixer vol 50\n"
 
 
+static void pr_level_exit(int level) NORETURN;
 static void pr_level_exit(int level)
 {
 	printf("Level (L/R): %d/%d\n", level&0xff, ((level&0xff00) >> 8));
@@ -48,8 +49,7 @@ int mixer_main(int argc, char **argv )
 	unsigned opts, extra_args;
 	char* device;
 	char* mixer = 0;
-	uint32_t write_level;
-	uint32_t read_level;
+	uint32_t level;
 	int devmask, i;
 	const char *m_names[SOUND_MIXER_NRDEVICES] = SOUND_DEVICE_NAMES ;
 	int mixer_device=0;
@@ -103,20 +103,17 @@ int mixer_main(int argc, char **argv )
 
 	/* mixer device reading */
 
-	ioctl_or_perror_and_die(fd_mixer, MIXER_READ(mixer_device), &read_level, "MIXER_READ");
+	ioctl_or_perror_and_die(fd_mixer, MIXER_READ(mixer_device), &level, "MIXER_READ");
 
-	if (extra_args == 1) pr_level_exit(read_level);
+	if (extra_args == 1) pr_level_exit(level);
 
 
 	/* mixer device setting */
 
-	write_level = xatou_range(argv[argc - 1], 0, 100);
-	write_level = (write_level<<8) + write_level;
+	level = xatou_range(argv[argc - 1], 0, 100);
+	level = (level<<8) + level;
 
-	ioctl_or_perror_and_die(fd_mixer, MIXER_WRITE(mixer_device), &write_level, "MIXER_WRITE");
+	ioctl_or_perror_and_die(fd_mixer, MIXER_WRITE(mixer_device), &level, "MIXER_WRITE");
 
-	pr_level_exit(write_level);
-	
-
-	return 0;
+	pr_level_exit(level);
 }
