@@ -11,6 +11,15 @@
  *
  */
 
+//config:config MIXER
+//config:	bool "mixer"
+//config:	default y
+//config:	select PLATFORM_LINUX
+//config:	help
+//config:	  Mixer for OSS audio
+
+//kbuild:lib-$(CONFIG_MIXER) += mixer.o
+//applet:IF_MIXER(APPLET(mixer, BB_DIR_USR_BIN, BB_SUID_DROP))
 
 #include <linux/soundcard.h>
 #include "libbb.h"
