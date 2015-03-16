@@ -71,9 +71,11 @@
 //kbuild:lib-$(CONFIG_MDEV) += mdev.o
 
 //usage:#define mdev_trivial_usage
-//usage:       "[-s]"
+//usage:       "[-s|-i]"
 //usage:#define mdev_full_usage "\n\n"
 //usage:       "mdev -s is to be run during boot to scan /sys and populate /dev.\n"
+//usage:       "\n"
+//usage:       "mdev -i will read events from stdin\n"
 //usage:       "\n"
 //usage:       "Bare mdev is a kernel hotplug helper. To activate it:\n"
 //usage:       "	echo /sbin/mdev >/proc/sys/kernel/hotplug\n"
@@ -1013,7 +1015,7 @@ static void signal_mdevs(unsigned my_pid)
 	}
 }
 
-static void handle_event(char *temp)
+static void handle_event(char *temp, int usage_on_error)
 {
 	char *fw;
 	char *seq;
@@ -1033,8 +1035,11 @@ static void handle_event(char *temp)
 	G.subsystem = getenv("SUBSYSTEM");
 	action = getenv("ACTION");
 	env_devpath = getenv("DEVPATH");
-	if (!action || !env_devpath /*|| !G.subsystem*/)
-		bb_show_usage();
+	if (!action || !env_devpath /*|| !G.subsystem*/) {
+		if (usage_on_error)
+			bb_show_usage();
+		return;
+	}
 	fw = getenv("FIRMWARE");
 	seq = getenv("SEQNUM");
 	op = index_in_strings(keywords, action);
@@ -1088,7 +1093,8 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 	/* We can be called as hotplug helper */
 	/* Kernel cannot provide suitable stdio fds for us, do it ourself */
-	bb_sanitize_stdio();
+	if (argv[1] && strcmp(argv[1], "-i") != 0)
+		bb_sanitize_stdio();
 
 	/* Force the configuration file settings exactly */
 	umask(0);
@@ -1130,8 +1136,41 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 		recursive_action("/sys/class",
 			ACTION_RECURSE | ACTION_FOLLOWLINKS,
 			fileAction, dirAction, temp, 0);
+	} else if (argv[1] && strcmp(argv[1], "-i") != 0) {
+		RESERVE_CONFIG_BUFFER(msgbuf, 16*1024);
+		struct pollfd fds;
+		int r;
+		fds.fd = 0;
+		fds.events = POLLIN;
+		while ((r = poll(&fds, 1, 2000)) > 0) {
+			int i, len, slen;
+			clearenv();
+
+			if (!(fds.revents & POLLIN))
+				continue;
+			len = read(fds.fd, msgbuf, sizeof(msgbuf));
+			for (i = 0; i < len; i += slen + 1) {
+				char *key, *value;
+
+				key = msgbuf + i;
+				value = strchr(key, '=');
+				slen = strlen(msgbuf+i);
+				if (!slen || value == NULL)
+					continue;
+
+				value[0] = '\0';
+				value++;
+
+				setenv(key, value, 1);
+			}
+			handle_event(temp, 0);
+			if (fds.revents & POLLHUP)
+				break;
+		}
+		if (r == -1)
+			return EXIT_FAILURE;
 	} else {
-		handle_event(temp);
+		handle_event(temp, 1);
 	}
 
 	if (ENABLE_FEATURE_CLEAN_UP)
