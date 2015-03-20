@@ -1151,7 +1151,10 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			if (!(fds.revents & POLLIN))
 				continue;
 			len = read(fds.fd, msgbuf, sizeof(msgbuf));
-			for (i = 0; i < len; i += slen + 1) {
+			if (len < 1) // this shouldn't happen, but...
+				continue;
+
+			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
 				char *key;
 
 				key = msgbuf + i;
@@ -1162,6 +1165,18 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 				putenv(key);
 			}
 			handle_event(temp, 0);
+
+			/* if i < len, we have at least part of one more
+			 * message, and need to move it up and save it.
+			 * We will have at least one full event if it
+			 * was written atomically, since an event is
+			 * under 4096 bytes.
+			 */
+			if ((i + 1 < len) /* && !msgbuf[i]*/) {
+				i++;
+				len = len - i;
+				memmove(msgbuf, msgbuf + i, len);
+			}
 			if (fds.revents & POLLHUP)
 				break;
 		}
