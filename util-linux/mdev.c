@@ -1136,32 +1136,30 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 		recursive_action("/sys/class",
 			ACTION_RECURSE | ACTION_FOLLOWLINKS,
 			fileAction, dirAction, temp, 0);
-	} else if (argv[1] && strcmp(argv[1], "-i") != 0) {
+	} else if (argv[1] && strcmp(argv[1], "-i") == 0) {
 		RESERVE_CONFIG_BUFFER(msgbuf, 16*1024);
 		struct pollfd fds;
 		int r;
 		fds.fd = 0;
 		fds.events = POLLIN;
+		const char *const syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
 		while ((r = poll(&fds, 1, 2000)) > 0) {
 			int i, len, slen;
 			clearenv();
+			putenv(syspath);
 
 			if (!(fds.revents & POLLIN))
 				continue;
 			len = read(fds.fd, msgbuf, sizeof(msgbuf));
 			for (i = 0; i < len; i += slen + 1) {
-				char *key, *value;
+				char *key;
 
 				key = msgbuf + i;
-				value = strchr(key, '=');
-				slen = strlen(msgbuf+i);
-				if (!slen || value == NULL)
+				slen = strlen(key);
+				if (!slen || strchr(key, '=') == NULL)
 					continue;
 
-				value[0] = '\0';
-				value++;
-
-				setenv(key, value, 1);
+				putenv(key);
 			}
 			handle_event(temp, 0);
 			if (fds.revents & POLLHUP)
