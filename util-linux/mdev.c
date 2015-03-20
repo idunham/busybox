@@ -939,6 +939,16 @@ static void open_mdev_log(const char *seq, unsigned my_pid)
 	}
 }
 
+/* Where are the first two bytes marking the end of a message?
+ * (ie, first "\0\0" in msgbuf)
+ */
+static size_t msg_end(char *msgbuf, size_t bufsiz)
+{
+	size_t i = 0;
+	while ((i<bufsiz) && (msgbuf[i] || msgbuf[i+1])) i++;
+	return i;
+}
+
 /* If it exists, does /dev/mdev.seq match $SEQNUM?
  * If it does not match, earlier mdev is running
  * in parallel, and we need to wait.
@@ -1137,21 +1147,35 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			ACTION_RECURSE | ACTION_FOLLOWLINKS,
 			fileAction, dirAction, temp, 0);
 	} else if (argv[1] && strcmp(argv[1], "-i") == 0) {
-		RESERVE_CONFIG_BUFFER(msgbuf, 16*1024);
+#define MSGBUFSIZE 16*1024
+		RESERVE_CONFIG_BUFFER(msgbuf, MSGBUFSIZE);
 		struct pollfd fds;
-		int r;
+		int r, len = 0;
+		const char * syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
 		fds.fd = 0;
 		fds.events = POLLIN;
-		const char *const syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
-		while ((r = poll(&fds, 1, 2000)) > 0) {
-			int i, len, slen;
-			clearenv();
-			putenv(syspath);
 
-			if (!(fds.revents & POLLIN))
+		while (((r = poll(&fds, 1, 2000)) > 0) || 
+		      (msg_end(msgbuf, MSGBUFSIZE) < len)) {
+			int i, nlen, slen;
+			clearenv();
+			putenv((char*)syspath);
+
+			if (fds.revents & POLLIN) {
+
+				memset(msgbuf + len, 0, MSGBUFSIZE - len);
+				nlen = read(fds.fd, msgbuf+len, MSGBUFSIZE-len);
+
+				if (nlen > 1)
+					len += nlen;
+			}
+
+			if (len < msg_end(msgbuf, MSGBUFSIZE)) {
 				continue;
-			len = read(fds.fd, msgbuf, sizeof(msgbuf));
-			for (i = 0; i < len; i += slen + 1) {
+			}
+
+
+			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
 				char *key;
 
 				key = msgbuf + i;
@@ -1161,8 +1185,25 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 				putenv(key);
 			}
-			handle_event(temp, 0);
-			if (fds.revents & POLLHUP)
+			if (!msgbuf[i]) {
+				handle_event(temp, 0);
+			}
+
+			/* if i < len, we have at least part of one more
+			 * message, and need to move it up and save it.
+			 * We will have at least one full event if it
+			 * was written atomically, since an event is
+			 * under 4096 bytes.
+			 */
+			if ((i + 1 < len) /* && !msgbuf[i]*/) {
+				i++;
+				len = len - i;
+				memmove(msgbuf, msgbuf + i, len);
+			} else {
+				len = 0;
+			}
+			if ((fds.revents & POLLHUP) &&
+			    (msg_end(msgbuf, len + 1) > len))
 				break;
 		}
 		if (r == -1)
