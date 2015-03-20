@@ -939,6 +939,16 @@ static void open_mdev_log(const char *seq, unsigned my_pid)
 	}
 }
 
+/* Where are the first two bytes marking the end of a message?
+ * (ie, first "\0\0" in msgbuf)
+ */
+static size_t end_of_msg(char *msgbuf, size_t bufsiz)
+{
+	size_t i = 0;
+	while ((i<bufsiz) && (msgbuf[i] || msgbuf[++i])) ;
+	return i;
+}
+
 /* If it exists, does /dev/mdev.seq match $SEQNUM?
  * If it does not match, earlier mdev is running
  * in parallel, and we need to wait.
@@ -1139,20 +1149,28 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 	} else if (argv[1] && strcmp(argv[1], "-i") == 0) {
 		RESERVE_CONFIG_BUFFER(msgbuf, 16*1024);
 		struct pollfd fds;
-		int r;
+		int r, len = 0;
 		fds.fd = 0;
 		fds.events = POLLIN;
 		const char *const syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
-		while ((r = poll(&fds, 1, 2000)) > 0) {
-			int i, len, slen;
+
+		while ((len >= 4) || ((r = poll(&fds, 1, 2000)) > 0)) {
+			int i, nlen, slen;
 			clearenv();
 			putenv(syspath);
 
 			if (!(fds.revents & POLLIN))
 				continue;
-			len = read(fds.fd, msgbuf, sizeof(msgbuf));
-			if (len < 1) // this shouldn't happen, but...
+
+			memset(msgbuf + len, 0, sizeof(msgbuf) - len);
+			nlen = read(fds.fd, msgbuf + len, sizeof(msgbuf) - len);
+
+			if (nlen > 1)
+				len += nlen;
+
+			if (len <= end_of_msg(msgbuf, sizeof(msgbuf))) {
 				continue;
+			}
 
 			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
 				char *key;
@@ -1164,7 +1182,8 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 				putenv(key);
 			}
-			handle_event(temp, 0);
+			if (!msgbuf[i])
+				handle_event(temp, 0);
 
 			/* if i < len, we have at least part of one more
 			 * message, and need to move it up and save it.
@@ -1176,6 +1195,8 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 				i++;
 				len = len - i;
 				memmove(msgbuf, msgbuf + i, len);
+			} else {
+				len = 0;
 			}
 			if (fds.revents & POLLHUP)
 				break;
