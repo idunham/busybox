@@ -1142,7 +1142,7 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 	/* We can be called as hotplug helper */
 	/* Kernel cannot provide suitable stdio fds for us, do it ourself */
-	IF_FEATURE_MDEV_PIPE(if (!argv[1]))
+	IF_FEATURE_MDEV_PIPE(if (!argv[1] || argv[1][0] != '-'))
 		bb_sanitize_stdio();
 
 	/* Force the configuration file settings exactly */
