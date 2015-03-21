@@ -311,6 +311,16 @@ struct globals {
 /* We use additional bytes in make_device() */
 #define SCRATCH_SIZE 128
 
+/* Where are the first two bytes marking the end of a message?
+ * (ie, first "\0\0" in msgbuf)
+ */
+static size_t msg_end(char *msgbuf, size_t bufsiz)
+{
+	size_t i = 0;
+	while ((i<bufsiz) && (msgbuf[i] || msgbuf[i+1])) i++;
+	return i;
+}
+
 #if ENABLE_FEATURE_MDEV_CONF
 
 static void make_default_cur_rule(void)
@@ -494,11 +504,32 @@ static const struct rule *next_rule(void)
 	return rule;
 }
 
-static int env_matches(struct envmatch *e)
+#if ENABLE_FEATURE_MDEV_PIPE
+static char * getkey(const char *key, char *buf, size_t n)
+{
+	size_t i, clen, klen = strlen(key);
+
+	if (!n || !buf)
+		return getenv(key);
+	for(i=0; i < n && buf[i]; i += (clen + 1)) {
+		clen = strnlen(buf+i, n - i);
+		if (klen >= n - i)
+			return NULL;
+		if ((strncmp(buf+i,key,klen)) || buf[i+klen] != '=')
+			continue;
+		return buf+i+klen+1;
+	}
+	return NULL;
+}
+#else
+#define getkey(a,b,c) getenv(a)
+#endif
+
+static int env_matches(struct envmatch *e, char *buf, size_t bsiz)
 {
 	while (e) {
 		int r;
-		char *val = getenv(e->envname);
+		char *val = getkey(e->envname, buf, bsiz);
 		if (!val)
 			return 0;
 		r = regexec(&e->match, val, /*size*/ 0, /*range[]*/ NULL, /*eflags*/ 0);
@@ -561,7 +592,8 @@ static char *build_alias(char *alias, const char *device_name)
  * device_name = $DEVNAME (may be NULL)
  * path        = /sys/$DEVPATH
  */
-static void make_device(char *device_name, char *path, int operation)
+static void make_device(char *device_name, char *path, int operation,
+			char *buf, size_t bsiz)
 {
 	int major, minor, type, len;
 	char *path_end = path + strlen(path);
@@ -643,7 +675,7 @@ static void make_device(char *device_name, char *path, int operation)
 		rule = next_rule();
 
 #if ENABLE_FEATURE_MDEV_CONF
-		if (!env_matches(rule->envmatch))
+		if (!env_matches(rule->envmatch, buf, bsiz))
 			continue;
 		if (rule->maj >= 0) {  /* @maj,min rule */
 			if (major != rule->maj)
@@ -654,7 +686,7 @@ static void make_device(char *device_name, char *path, int operation)
 			goto rule_matches;
 		}
 		if (rule->envvar) { /* $envvar=regex rule */
-			str_to_match = getenv(rule->envvar);
+			str_to_match = getkey(rule->envvar, buf, bsiz);
 			dbg3("getenv('%s'):'%s'", rule->envvar, str_to_match);
 			if (!str_to_match)
 				continue;
@@ -836,7 +868,8 @@ static int FAST_FUNC fileAction(const char *fileName,
 
 	strcpy(scratch, fileName);
 	scratch[len] = '\0';
-	make_device(/*DEVNAME:*/ NULL, scratch, OP_add);
+	// XXX: Make this use the uevent file?
+	make_device(/*DEVNAME:*/ NULL, scratch, OP_add, 0, 0);
 
 	return TRUE;
 }
@@ -950,16 +983,6 @@ static void open_mdev_log(const char *seq, unsigned my_pid)
 	}
 }
 
-/* Where are the first two bytes marking the end of a message?
- * (ie, first "\0\0" in msgbuf)
- */
-static size_t msg_end(char *msgbuf, size_t bufsiz)
-{
-	size_t i = 0;
-	while ((i<bufsiz) && (msgbuf[i] || msgbuf[i+1])) i++;
-	return i;
-}
-
 /* If it exists, does /dev/mdev.seq match $SEQNUM?
  * If it does not match, earlier mdev is running
  * in parallel, and we need to wait.
@@ -1041,7 +1064,7 @@ static void signal_mdevs(unsigned my_pid)
  * and !bufsiz can be used as usage_on_error.
  * Eventually, this path should be used for mdev -s as well.
  */
-static void handle_event(char *temp, int usage_on_error)
+static void handle_event(char *temp, char *buf, size_t bsiz)
 {
 	char *fw;
 	char *seq;
@@ -1057,16 +1080,16 @@ static void handle_event(char *temp, int usage_on_error)
 	 * ACTION can be "add", "remove", "change"
 	 * DEVPATH is like "/block/sda" or "/class/input/mice"
 	 */
-	env_devname = getenv("DEVNAME"); /* can be NULL */
-	G.subsystem = getenv("SUBSYSTEM");
-	action = getenv("ACTION");
-	env_devpath = getenv("DEVPATH");
+	env_devname = getkey("DEVNAME", buf, bsiz); /* can be NULL */
+	G.subsystem = getkey("SUBSYSTEM", buf, bsiz);
+	action = getkey("ACTION", buf, bsiz);
+	env_devpath = getkey("DEVPATH", buf, bsiz);
 	if (!action || !env_devpath /*|| !G.subsystem*/) {
-		if (usage_on_error)
+		if (!bsiz)
 			bb_show_usage();
 		return;
 	}
-	fw = getenv("FIRMWARE");
+	fw = getkey("FIRMWARE", buf, bsiz);
 	seq = getenv("SEQNUM");
 	op = index_in_strings(keywords, action);
 
@@ -1089,10 +1112,10 @@ static void handle_event(char *temp, int usage_on_error)
 		 * to happen and to cause erroneous deletion
 		 * of device nodes. */
 		if (!fw)
-			make_device(env_devname, temp, op);
+			make_device(env_devname, temp, op, buf, bsiz);
 	}
 	else {
-		make_device(env_devname, temp, op);
+		make_device(env_devname, temp, op, buf, bsiz);
 		if (ENABLE_FEATURE_MDEV_LOAD_FIRMWARE) {
 			if (op == OP_add && fw)
 				load_firmware(fw, temp);
@@ -1164,24 +1187,19 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			fileAction, dirAction, temp, 0);
 	} else if (ENABLE_FEATURE_MDEV_PIPE && argv[1] && strcmp(argv[1], "-i") == 0) {
 #define MSGBUFSIZE 16*1024
+#define MDEV_ENVIRON 0
 		RESERVE_CONFIG_BUFFER(msgbuf, MSGBUFSIZE);
 		struct pollfd fds;
 		int r, len = 0;
-		const char * syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
 		fds.fd = 0;
 		fds.events = POLLIN;
 
 		while (((r = poll(&fds, 1, 2000)) > 0) || 
 		      (msg_end(msgbuf, MSGBUFSIZE) < len)) {
-			int i, nlen, slen;
-			clearenv();
-			putenv((char*)syspath);
+			int i, nlen;
 
 			if (fds.revents & POLLIN) {
-
-				memset(msgbuf + len, 0, MSGBUFSIZE - len);
 				nlen = read(fds.fd, msgbuf+len, MSGBUFSIZE-len);
-
 				if (nlen > 1)
 					len += nlen;
 			}
@@ -1190,18 +1208,8 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 				continue;
 			}
 
-
-			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
-				char *key = msgbuf + i;
-
-				slen = strlen(key);
-				if (!slen || strchr(key, '=') == NULL)
-					continue;
-				putenv(key);
-			}
-			if (!msgbuf[i]) {
-				handle_event(temp, 0);
-			}
+			handle_event(temp, msgbuf, len);
+			i = msg_end(msgbuf, len) + 1;
 
 			/* if i < len, we have at least part of one more
 			 * message, and need to move it up and save it.
@@ -1209,7 +1217,7 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			 * was written atomically, since an event is
 			 * under 4096 bytes.
 			 */
-			if ((i + 1 < len) /* && !msgbuf[i]*/) {
+			if ((i < len) /* && !msgbuf[i]*/) {
 				i++;
 				len = len - i;
 				memmove(msgbuf, msgbuf + i, len);
@@ -1217,13 +1225,13 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 				len = 0;
 			}
 			if ((fds.revents & POLLHUP) &&
-			    (msg_end(msgbuf, len + 1) > len))
+			    (msg_end(msgbuf, len) > len))
 				break;
 		}
 		if (r == -1)
 			return EXIT_FAILURE;
 	} else {
-		handle_event(temp, 1);
+		handle_event(temp, NULL, 0);
 	}
 
 	if (ENABLE_FEATURE_CLEAN_UP)
