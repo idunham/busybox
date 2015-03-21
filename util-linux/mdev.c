@@ -942,10 +942,10 @@ static void open_mdev_log(const char *seq, unsigned my_pid)
 /* Where are the first two bytes marking the end of a message?
  * (ie, first "\0\0" in msgbuf)
  */
-static size_t end_of_msg(char *msgbuf, size_t bufsiz)
+static size_t msg_end(char *msgbuf, size_t bufsiz)
 {
 	size_t i = 0;
-	while ((i<bufsiz) && (msgbuf[i] || msgbuf[++i])) ;
+	while ((i<bufsiz) && (msgbuf[i] || msgbuf[i+1])) i++;
 	return i;
 }
 
@@ -1147,30 +1147,33 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			ACTION_RECURSE | ACTION_FOLLOWLINKS,
 			fileAction, dirAction, temp, 0);
 	} else if (argv[1] && strcmp(argv[1], "-i") == 0) {
-		RESERVE_CONFIG_BUFFER(msgbuf, 16*1024);
+#define MSGBUFSIZE 16*1024
+		RESERVE_CONFIG_BUFFER(msgbuf, MSGBUFSIZE);
 		struct pollfd fds;
 		int r, len = 0;
+		const char * syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
 		fds.fd = 0;
 		fds.events = POLLIN;
-		const char *const syspath = "/sbin:/usr/sbin:/bin:/usr/bin";
 
-		while ((len >= 4) || ((r = poll(&fds, 1, 2000)) > 0)) {
+		while (((r = poll(&fds, 1, 2000)) > 0) || 
+		      (msg_end(msgbuf, MSGBUFSIZE) < len)) {
 			int i, nlen, slen;
 			clearenv();
-			putenv(syspath);
+			putenv((char*)syspath);
 
-			if (!(fds.revents & POLLIN))
-				continue;
+			if (fds.revents & POLLIN) {
 
-			memset(msgbuf + len, 0, sizeof(msgbuf) - len);
-			nlen = read(fds.fd, msgbuf + len, sizeof(msgbuf) - len);
+				memset(msgbuf + len, 0, MSGBUFSIZE - len);
+				nlen = read(fds.fd, msgbuf+len, MSGBUFSIZE-len);
 
-			if (nlen > 1)
-				len += nlen;
+				if (nlen > 1)
+					len += nlen;
+			}
 
-			if (len <= end_of_msg(msgbuf, sizeof(msgbuf))) {
+			if (len < msg_end(msgbuf, MSGBUFSIZE)) {
 				continue;
 			}
+
 
 			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
 				char *key;
@@ -1182,8 +1185,9 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 				putenv(key);
 			}
-			if (!msgbuf[i])
+			if (!msgbuf[i]) {
 				handle_event(temp, 0);
+			}
 
 			/* if i < len, we have at least part of one more
 			 * message, and need to move it up and save it.
@@ -1198,7 +1202,8 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			} else {
 				len = 0;
 			}
-			if (fds.revents & POLLHUP)
+			if ((fds.revents & POLLHUP) &&
+			    (msg_end(msgbuf, len + 1) > len))
 				break;
 		}
 		if (r == -1)
