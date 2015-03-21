@@ -1194,7 +1194,7 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 		fds.events = POLLIN;
 
 		while (((r = poll(&fds, 1, 2000)) > 0) || 
-		      (msg_end(msgbuf, MSGBUFSIZE) < len)) {
+		      (msg_end(msgbuf, MSGBUFSIZE) + 1 < len)) {
 			int i, nlen;
 
 			if (fds.revents & POLLIN) {
@@ -1216,15 +1216,15 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			 * was written atomically, since an event is
 			 * under 4096 bytes.
 			 */
-			if ((i < len) /* && !msgbuf[i]*/) {
+			if ((i < len)) {
 				i++;
 				len = len - i;
 				memmove(msgbuf, msgbuf + i, len);
 			} else {
 				len = 0;
 			}
-			if ((fds.revents & POLLHUP) &&
-			    (msg_end(msgbuf, len) > len))
+			if ((fds.revents & POLLHUP) && (len - 1 < 0 ||
+			    (msg_end(msgbuf, MSGBUFSIZE) > len - 1)))
 				break;
 		}
 		if (ENABLE_FEATURE_CLEAN_UP)
