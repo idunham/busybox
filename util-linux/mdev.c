@@ -55,6 +55,15 @@
 //config:
 //config:	  For more information, please see docs/mdev.txt
 //config:
+//config:config FEATURE_MDEV_PIPE
+//config:	bool "Support reading hotplug events from pipe"
+//config:	default y
+//config:	depends on MDEV
+//config:	help
+//config:	  This adds support for "mdev -i", letting mdev read events
+//config:	  from stdin. An event is submitted as a series of 
+//config:	  NUL-terminated strings, followed by a NUL byte.
+//config:
 //config:config FEATURE_MDEV_LOAD_FIRMWARE
 //config:	bool "Support loading of firmwares"
 //config:	default y
@@ -74,8 +83,9 @@
 //usage:       "[-s|-i]"
 //usage:#define mdev_full_usage "\n\n"
 //usage:       "mdev -s is to be run during boot to scan /sys and populate /dev.\n"
-//usage:       "\n"
-//usage:       "mdev -i will read events from stdin\n"
+//usage:       IF_FEATURE_MDEV_PIPE(
+//usage:       "\nmdev -i will read events from stdin\n"
+//usage:	)
 //usage:       "\n"
 //usage:       "Bare mdev is a kernel hotplug helper. To activate it:\n"
 //usage:       "	echo /sbin/mdev >/proc/sys/kernel/hotplug\n"
@@ -1025,6 +1035,11 @@ static void signal_mdevs(unsigned my_pid)
 	}
 }
 
+/* XXX: When we move to general key-based lookup (getkey instead of getenv),
+ * this should become (char *temp, char *buf, size_t bufsiz)
+ * and !bufsiz can be used as usage_on_error.
+ * Eventually, this path should be used for mdev -s as well.
+ */
 static void handle_event(char *temp, int usage_on_error)
 {
 	char *fw;
@@ -1103,7 +1118,7 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 	/* We can be called as hotplug helper */
 	/* Kernel cannot provide suitable stdio fds for us, do it ourself */
-	if (argv[1] && strcmp(argv[1], "-i") != 0)
+	IF_FEATURE_MDEV_PIPE(if (argv[1] && strcmp(argv[1], "-i") != 0))
 		bb_sanitize_stdio();
 
 	/* Force the configuration file settings exactly */
@@ -1146,7 +1161,7 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 		recursive_action("/sys/class",
 			ACTION_RECURSE | ACTION_FOLLOWLINKS,
 			fileAction, dirAction, temp, 0);
-	} else if (argv[1] && strcmp(argv[1], "-i") == 0) {
+	} else if (ENABLE_FEATURE_MDEV_PIPE && argv[1] && strcmp(argv[1], "-i") == 0) {
 #define MSGBUFSIZE 16*1024
 		RESERVE_CONFIG_BUFFER(msgbuf, MSGBUFSIZE);
 		struct pollfd fds;
@@ -1176,13 +1191,11 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 
 
 			for (i = 0; i < len && msgbuf[i]; i += slen + 1) {
-				char *key;
+				char *key = msgbuf + i;
 
-				key = msgbuf + i;
 				slen = strlen(key);
 				if (!slen || strchr(key, '=') == NULL)
 					continue;
-
 				putenv(key);
 			}
 			if (!msgbuf[i]) {
