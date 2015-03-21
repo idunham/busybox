@@ -1199,7 +1199,6 @@ int mdev_main(int argc UNUSED_PARAM, char **argv)
 			int i, nlen;
 
 			if (fds.revents & POLLIN) {
-				memset(msgbuf + len, 0, MSGBUFSIZE - len);
 				nlen = read(fds.fd, msgbuf+len, MSGBUFSIZE-len);
 				if (nlen > 1)
 					len += nlen;
