@@ -80,11 +80,12 @@
 //kbuild:lib-$(CONFIG_MDEV) += mdev.o
 
 //usage:#define mdev_trivial_usage
-//usage:       "[-s|-i]"
+//usage:       IF_FEATURE_MDEV_PIPE("[-s|-i]")
+//usage:       IF_NOT_FEATURE_MDEV_PIPE("[-s]")
 //usage:#define mdev_full_usage "\n\n"
 //usage:       "mdev -s is to be run during boot to scan /sys and populate /dev.\n"
 //usage:       IF_FEATURE_MDEV_PIPE(
-//usage:       "\nmdev -i will read events from stdin\n"
+//usage:       "mdev -i will read events from stdin\n"
 //usage:	)
 //usage:       "\n"
 //usage:       "Bare mdev is a kernel hotplug helper. To activate it:\n"
