@@ -63,6 +63,19 @@
 //config:	  This adds support for "mdev -i", letting mdev read events
 //config:	  from stdin. An event is submitted as a series of 
 //config:	  NUL-terminated strings, followed by a NUL byte.
+//config:	  Costs over 600 bytes on i386.
+//config:
+//config:config FEATURE_MDEV_NEWSCAN
+//config:	bool "More featureful, possibly slower, mdev -s"
+//config:	default n
+//config:	depends on MDEV
+//config:	help
+//config:	  By default mdev -s looks at several files in each directory
+//config:	  within /sys; this checks just the uevent file.
+//config:	  The new codepath is able to support $ENVVAR rules
+//config:	  as well as the standard device name matching.
+//config:	  Requires a later 2.6.xx or newer kernel;
+//config:	  saves >100 bytes if MDEV_PIPE is selected.
 //config:
 //config:config FEATURE_MDEV_LOAD_FIRMWARE
 //config:	bool "Support loading of firmwares"
@@ -600,7 +613,7 @@ static void make_device(char *device_name, char *path, int operation)
 	/* else: for delete, -1 still deletes the node, but < -1 suppresses that */
 
 	/* Determine device name */
-	if (!device_name) {
+	if (!ENABLE_FEATURE_MDEV_NEWSCAN && !device_name) {
 		/*
 		 * There was no $DEVNAME envvar (for example, mdev -s never has).
 		 * But it is very useful: it contains the *path*, not only basename,
@@ -831,23 +844,47 @@ static void make_device(char *device_name, char *path, int operation)
 	} /* for (;;) */
 }
 
+static void handle_event(char *temp, char *buf, size_t bsiz);
 /* File callback for /sys/ traversal */
 static int FAST_FUNC fileAction(const char *fileName,
 		struct stat *statbuf UNUSED_PARAM,
 		void *userData,
 		int depth UNUSED_PARAM)
 {
-	size_t len = strlen(fileName) - 4; /* can't underflow */
 	char *scratch = userData;
 
+#if ENABLE_FEATURE_MDEV_NEWSCAN
+	RESERVE_CONFIG_BUFFER(eventfile, 4096);
+	int fd, bsiz, i;
+	size_t len = strlen(fileName);
+	
+	if (len < 8 || strcmp(fileName+(len-=7),"/uevent") || len>=PATH_MAX || 
+	    (fd = open(fileName, O_RDONLY)) < 0) {
+		RELEASE_CONFIG_BUFFER(eventfile);
+		return FALSE;
+	}
+	bsiz = read(fd, eventfile, 4096);
+	close(fd);
+	if (bsiz > 0) {
+		for (i = 0; i <= bsiz; i++) {
+			if (eventfile[i] == '\n') eventfile[i] = '\0';
+		}
+		handle_event(scratch, eventfile, bsiz);
+	}
+
+	RELEASE_CONFIG_BUFFER(eventfile);
+	if (bsiz <= 0)
+		return FALSE;
+#else
+	size_t len = strlen(fileName) - 4; /* can't underflow */
 	/* len check is for paranoid reasons */
 	if (strcmp(fileName + len, "/dev") != 0 || len >= PATH_MAX)
 		return FALSE;
 
 	strcpy(scratch, fileName);
 	scratch[len] = '\0';
-	// XXX: Make this use the uevent file?
 	make_device(/*DEVNAME:*/ NULL, scratch, OP_add);
+#endif
 
 	return TRUE;
 }
@@ -1037,11 +1074,6 @@ static void signal_mdevs(unsigned my_pid)
 	}
 }
 
-/* XXX: When we move to general key-based lookup (getkey instead of getenv),
- * this should become (char *temp, char *buf, size_t bufsiz)
- * and !bufsiz can be used as usage_on_error.
- * Eventually, this path should be used for mdev -s as well.
- */
 static void handle_event(char *temp, char *buf, size_t bsiz)
 {
 	char *fw;
