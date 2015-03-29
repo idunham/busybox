@@ -504,32 +504,11 @@ static const struct rule *next_rule(void)
 	return rule;
 }
 
-#if ENABLE_FEATURE_MDEV_PIPE
-static char * getkey(const char *key, char *buf, size_t n)
-{
-	size_t i, clen, klen = strlen(key);
-
-	if (!n || !buf)
-		return getenv(key);
-	for(i=0; i < n && buf[i]; i += (clen + 1)) {
-		clen = strnlen(buf+i, n - i);
-		if (klen >= n - i)
-			return NULL;
-		if ((strncmp(buf+i,key,klen)) || buf[i+klen] != '=')
-			continue;
-		return buf+i+klen+1;
-	}
-	return NULL;
-}
-#else
-#define getkey(a,b,c) getenv(a)
-#endif
-
-static int env_matches(struct envmatch *e, char *buf, size_t bsiz)
+static int env_matches(struct envmatch *e)
 {
 	while (e) {
 		int r;
-		char *val = getkey(e->envname, buf, bsiz);
+		char *val = getenv(e->envname);
 		if (!val)
 			return 0;
 		r = regexec(&e->match, val, /*size*/ 0, /*range[]*/ NULL, /*eflags*/ 0);
@@ -592,8 +571,7 @@ static char *build_alias(char *alias, const char *device_name)
  * device_name = $DEVNAME (may be NULL)
  * path        = /sys/$DEVPATH
  */
-static void make_device(char *device_name, char *path, int operation,
-			char *buf, size_t bsiz)
+static void make_device(char *device_name, char *path, int operation)
 {
 	int major, minor, type, len;
 	char *path_end = path + strlen(path);
@@ -675,7 +653,7 @@ static void make_device(char *device_name, char *path, int operation,
 		rule = next_rule();
 
 #if ENABLE_FEATURE_MDEV_CONF
-		if (!env_matches(rule->envmatch, buf, bsiz))
+		if (!env_matches(rule->envmatch))
 			continue;
 		if (rule->maj >= 0) {  /* @maj,min rule */
 			if (major != rule->maj)
@@ -686,7 +664,7 @@ static void make_device(char *device_name, char *path, int operation,
 			goto rule_matches;
 		}
 		if (rule->envvar) { /* $envvar=regex rule */
-			str_to_match = getkey(rule->envvar, buf, bsiz);
+			str_to_match = getenv(rule->envvar);
 			dbg3("getenv('%s'):'%s'", rule->envvar, str_to_match);
 			if (!str_to_match)
 				continue;
@@ -869,7 +847,7 @@ static int FAST_FUNC fileAction(const char *fileName,
 	strcpy(scratch, fileName);
 	scratch[len] = '\0';
 	// XXX: Make this use the uevent file?
-	make_device(/*DEVNAME:*/ NULL, scratch, OP_add, 0, 0);
+	make_device(/*DEVNAME:*/ NULL, scratch, OP_add);
 
 	return TRUE;
 }
@@ -1075,21 +1053,35 @@ static void handle_event(char *temp, char *buf, size_t bsiz)
 	int seq_fd;
 	smalluint op;
 
+	if (bsiz) {
+		size_t i, slen = 0;
+
+		putenv((char*)bb_PATH_root_path);
+		for (i = 0; i < bsiz; i += slen + 1) {
+			char *key = buf + i;
+
+			slen = strlen(key);
+			if (!slen || strchr(key, '=') == NULL)
+				continue;
+			putenv(key);
+		}
+	}
+
 	/* Hotplug:
 	 * env ACTION=... DEVPATH=... SUBSYSTEM=... [SEQNUM=...] mdev
 	 * ACTION can be "add", "remove", "change"
 	 * DEVPATH is like "/block/sda" or "/class/input/mice"
 	 */
-	env_devname = getkey("DEVNAME", buf, bsiz); /* can be NULL */
-	G.subsystem = getkey("SUBSYSTEM", buf, bsiz);
-	action = getkey("ACTION", buf, bsiz);
-	env_devpath = getkey("DEVPATH", buf, bsiz);
+	env_devname = getenv("DEVNAME"); /* can be NULL */
+	G.subsystem = getenv("SUBSYSTEM");
+	action = getenv("ACTION");
+	env_devpath = getenv("DEVPATH");
 	if (!action || !env_devpath /*|| !G.subsystem*/) {
 		if (!bsiz)
 			bb_show_usage();
 		return;
 	}
-	fw = getkey("FIRMWARE", buf, bsiz);
+	fw = getenv("FIRMWARE");
 	seq = getenv("SEQNUM");
 	op = index_in_strings(keywords, action);
 
@@ -1112,15 +1104,18 @@ static void handle_event(char *temp, char *buf, size_t bsiz)
 		 * to happen and to cause erroneous deletion
 		 * of device nodes. */
 		if (!fw)
-			make_device(env_devname, temp, op, buf, bsiz);
+			make_device(env_devname, temp, op);
 	}
 	else {
-		make_device(env_devname, temp, op, buf, bsiz);
+		make_device(env_devname, temp, op);
 		if (ENABLE_FEATURE_MDEV_LOAD_FIRMWARE) {
 			if (op == OP_add && fw)
 				load_firmware(fw, temp);
 		}
 	}
+
+	if (bsiz)
+		clearenv();
 
 	dbg1("%s exiting", curtime());
 	if (seq_fd >= 0) {
